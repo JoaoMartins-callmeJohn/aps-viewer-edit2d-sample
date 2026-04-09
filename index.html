@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <title>APS Viewer - Edit2D Sample</title>
+  <meta charset="utf-8" />
+  <link rel="shortcut icon"
+    href="https://github.com/Autodesk-Forge/learn.forge.viewmodels/raw/master/img/favicon.ico">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@3.4.1/dist/css/bootstrap.min.css">
+  <link rel="stylesheet"
+    href="https://developer.api.autodesk.com/modelderivative/v2/viewers/7.*/style.min.css"
+    type="text/css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+  <script src="https://developer.api.autodesk.com/modelderivative/v2/viewers/7.*/viewer3D.min.js"></script>
+  <script src="Edit2dExtension.js"></script>
+  <style>
+    html,
+    body {
+      min-height: 100%;
+      height: 100%;
+    }
+
+    body {
+      padding-top: 5rem;
+    }
+
+    #apsViewer {
+      width: 100%;
+      height: calc(100vh - 5rem);
+      position: relative;
+    }
+
+    .navbar > .container {
+      width: 100%;
+    }
+
+    .navbar-right-link {
+      float: right;
+      margin-bottom: 0;
+    }
+  </style>
+</head>
+
+<body onload="initAPSViewer('dXJuOmFkc2sub2JqZWN0czpvcy5vYmplY3Q6anBvbS1zYW1wbGVzL1Nub3dkb24lMjBUb3dlcnMlMjBTYW1wbGUlMjBBcmNoaXRlY3R1cmFsLnJ2dA')">
+  <nav class="navbar navbar-default navbar-fixed-top">
+    <div class="container">
+      <a class="navbar-brand" href="https://aps.autodesk.com">
+        <img alt="Autodesk Platform Services"
+          src="https://cdn.autodesk.io/logo/black/stacked.png" height="20">
+      </a>
+      <div class="collapse navbar-collapse">
+        <div class="navbar-right-link navbar-form">
+          <a class="form-control"
+            href="https://github.com/martinjoa/aps-viewer-edit2d-sample">GitHub</a>
+        </div>
+      </div>
+    </div>
+  </nav>
+  <div class="container-fluid fill">
+    <div class="row fill">
+      <div id="apsViewer"></div>
+    </div>
+  </div>
+
+  <script>
+    let viewer = null;
+
+    async function getToken() {
+      const resp = await fetch(
+        'https://lowlblo75l.execute-api.us-east-1.amazonaws.com/default/GetTokenWithAHub'
+      );
+      const data = await resp.json();
+      return data.access_token;
+    }
+
+    async function initAPSViewer(urn) {
+      const accessToken = await getToken();
+
+      const options = {
+        env: 'AutodeskProduction',
+        accessToken: accessToken,
+        isAEC: true
+      };
+
+      Autodesk.Viewing.Initializer(options, () => {
+        const div = document.getElementById('apsViewer');
+        const config = {
+          extensions: ['Autodesk.Edit2D', 'Edit2dExtension']
+        };
+
+        viewer = new Autodesk.Viewing.Private.GuiViewer3D(div, config);
+        viewer.start();
+        viewer.setTheme('light-theme');
+
+        Autodesk.Viewing.Document.load(`urn:${urn}`, (doc) => {
+          const viewables = doc.getRoot().getDefaultGeometry();
+          viewer.loadDocumentNode(doc, viewables);
+        });
+      });
+    }
+  </script>
+</body>
+
+</html>
