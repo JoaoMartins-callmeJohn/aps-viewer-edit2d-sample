@@ -2,6 +2,10 @@
 
 Custom extension leveraging the APS Viewer's Edit2D extension to create polygons, react to polygon creation events, and display area labels.
 
+## Demo
+
+[![APS Viewer Edit2D Sample](https://img.youtube.com/vi/9AG4Z0fB9Wk/0.jpg)](https://www.youtube.com/watch?v=9AG4Z0fB9Wk&feature=youtu.be)
+
 ## How it works
 
 - Click the **Draw Polygon** toolbar button to activate the polygon drawing tool.
