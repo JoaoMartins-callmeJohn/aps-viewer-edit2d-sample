@@ -2,6 +2,9 @@ class Edit2dExtension extends Autodesk.Viewing.Extension {
   constructor(viewer, options) {
     super(viewer, options);
     this._onPolygonAdded = this._onPolygonAdded.bind(this);
+    this._onAfterAction = this._onAfterAction.bind(this);
+    // Maps shape.id -> Autodesk.Edit2D.ShapeLabel
+    this._labelMap = new Map();
   }
 
   async load() {
@@ -13,16 +16,32 @@ class Edit2dExtension extends Autodesk.Viewing.Extension {
       this._onPolygonAdded
     );
 
+    // Reconcile labels on every undo-stack action (handles delete, undo, redo, clear)
+    this._edit2D.defaultContext.undoStack.addEventListener(
+      Autodesk.Edit2D.UndoStack.AFTER_ACTION,
+      this._onAfterAction
+    );
+
+    if (this.viewer.toolbar) {
+      this._createUI();
+    }
+
     console.log('Edit2dExtension loaded.');
     return true;
   }
 
   unload() {
+    this._edit2D?.defaultContext.undoStack.removeEventListener(
+      Autodesk.Edit2D.UndoStack.AFTER_ACTION,
+      this._onAfterAction
+    );
+
     this._edit2D?.defaultTools.polygonTool.removeEventListener(
       Autodesk.Edit2D.PolygonTool.POLYGON_ADDED,
       this._onPolygonAdded
     );
 
+    this._removeAllLabels();
     this._deactivateCurrentTool();
 
     if (this._group) {
@@ -35,6 +54,12 @@ class Edit2dExtension extends Autodesk.Viewing.Extension {
   }
 
   onToolbarCreated() {
+    this._createUI();
+  }
+
+  _createUI() {
+    if (this._group) return;
+
     this._group = this.viewer.toolbar.getControl('Edit2dToolbar');
     if (!this._group) {
       this._group = new Autodesk.Viewing.UI.ControlGroup('Edit2dToolbar');
@@ -66,65 +91,122 @@ class Edit2dExtension extends Autodesk.Viewing.Extension {
   _deactivateCurrentTool() {
     const active = this.viewer.toolController.getActiveTool();
     if (active && active.getName().startsWith('Edit2')) {
-      active.selection?.clear();
+      try { active.selection?.clear(); } catch (_) { /* noop */ }
       this.viewer.toolController.deactivateTool(active.getName());
     }
   }
 
+  // --- Polygon creation callback (PolygonTool.POLYGON_ADDED) ---
+  // Called after a polygon is fully committed to the layer.
+  // Creates an area ShapeLabel and switches to the edit tool.
   _onPolygonAdded(event) {
     const polygon = event.polygon;
     console.log('Polygon completed:', polygon);
 
-    const points = [];
-    if (polygon.vertexCount !== undefined) {
-      for (let i = 0; i < polygon.vertexCount; i++) {
-        const p = polygon.getPoint(i);
-        points.push({ x: p.x.toFixed(2), y: p.y.toFixed(2) });
-      }
+    try {
+      this._createAreaLabel(polygon);
+    } catch (err) {
+      console.warn('Failed to create area label:', err);
     }
-
-    console.table(points);
-    this._showToast(`Polygon created with ${points.length} vertices`);
 
     if (this._drawBtn) {
       this._drawBtn.setState(Autodesk.Viewing.UI.Button.State.INACTIVE);
     }
 
-    // Defer tool switch so finishPolygon() completes cleanly (this.poly = null)
+    // Defer tool switch so finishPolygon() completes cleanly.
+    // 100ms lets the closing-click event fully resolve before the edit tool activates.
     setTimeout(() => {
       const controller = this.viewer.toolController;
       controller.deactivateTool(this._edit2D.defaultTools.polygonTool.getName());
       controller.activateTool(this._edit2D.defaultTools.polygonEditTool.getName());
-    }, 0);
+    }, 100);
   }
 
-  _showToast(message) {
-    let container = document.getElementById('edit2d-toast');
-    if (!container) {
-      container = document.createElement('div');
-      container.id = 'edit2d-toast';
-      Object.assign(container.style, {
-        position: 'fixed',
-        bottom: '20px',
-        left: '50%',
-        transform: 'translateX(-50%)',
-        background: '#333',
-        color: '#fff',
-        padding: '12px 24px',
-        borderRadius: '6px',
-        fontSize: '14px',
-        zIndex: '10000',
-        opacity: '0',
-        transition: 'opacity 0.3s ease',
-        pointerEvents: 'none'
-      });
-      document.body.appendChild(container);
+  // --- Undo-stack callback ---
+  // After every action, reconcile: destroy labels whose shapes no longer
+  // exist in the layer, and update area text for shapes that were edited.
+  _onAfterAction() {
+    try {
+      if (this._labelMap.size === 0) return;
+
+      const currentIds = new Set(
+        this._edit2D.defaultContext.layer.shapes.map(s => s.id)
+      );
+
+      for (const [shapeId, label] of this._labelMap) {
+        if (!currentIds.has(shapeId)) {
+          // Shape was deleted — destroy its label
+          try { label.dtor(); } catch (_) { /* noop */ }
+          this._labelMap.delete(shapeId);
+        } else {
+          // Shape still exists — refresh area text (handles edits/moves)
+          const shape = this._edit2D.defaultContext.layer.shapes.find(
+            s => s.id === shapeId
+          );
+          if (shape) {
+            label.setText(this._formatArea(shape));
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('_onAfterAction error:', err);
     }
-    container.textContent = message;
-    container.style.opacity = '1';
-    setTimeout(() => {
-      container.style.opacity = '0';
-    }, 3000);
+  }
+
+  // =========================================================================
+  //  Area label creation
+  //  Attaches an Autodesk.Edit2D.ShapeLabel to the polygon showing its area.
+  // =========================================================================
+  _createAreaLabel(polygon) {
+    const layer = this._edit2D.defaultContext.layer;
+    const label = new Autodesk.Edit2D.ShapeLabel(polygon, layer);
+    label.setText(this._formatArea(polygon));
+    this._labelMap.set(polygon.id, label);
+  }
+
+  // =========================================================================
+  //  Area label removal
+  //  Destroys the ShapeLabel and removes it from the tracking map.
+  // =========================================================================
+  _removeLabel(shapeId) {
+    const label = this._labelMap.get(shapeId);
+    if (!label) return;
+    try { label.dtor(); } catch (_) { /* noop */ }
+    this._labelMap.delete(shapeId);
+  }
+
+  // =========================================================================
+  //  Remove all area labels (used on extension unload).
+  // =========================================================================
+  _removeAllLabels() {
+    for (const [, label] of this._labelMap) {
+      try { label.dtor(); } catch (_) { /* noop */ }
+    }
+    this._labelMap.clear();
+  }
+
+  // =========================================================================
+  //  Format the polygon area as a display string.
+  //  Uses DefaultMeasureTransform + unitHandler for correct units when
+  //  available; falls back to raw model-unit value otherwise.
+  // =========================================================================
+  _formatArea(polygon) {
+    try {
+      if (typeof polygon.getArea !== 'function') return 'Area: —';
+
+      const unitHandler = this._edit2D.defaultContext.unitHandler;
+      const transform = unitHandler?.measureTransform
+        || new Autodesk.Edit2D.DefaultMeasureTransform(this.viewer);
+      const raw = polygon.getArea(transform);
+
+      if (unitHandler && typeof unitHandler.areaToString === 'function') {
+        return `Area: ${unitHandler.areaToString(raw)}`;
+      }
+      return `Area: ${raw.toFixed(2)}`;
+    } catch (err) {
+      console.warn('_formatArea error:', err);
+      return 'Area: —';
+    }
   }
 }
 
