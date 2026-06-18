@@ -80,6 +80,18 @@ class Edit2dExtension extends Autodesk.Viewing.Extension {
     drawBtn.icon.classList.add('fas', 'fa-draw-polygon');
     this._group.addControl(drawBtn);
     this._drawBtn = drawBtn;
+
+    const addProgBtn = new Autodesk.Viewing.UI.Button('AddProgPolygonBtn');
+    addProgBtn.onClick = () => this._addPolygonProgrammatically();
+    addProgBtn.setToolTip('Add Polygon Programmatically (repro)');
+    addProgBtn.icon.classList.add('fas', 'fa-plus-square');
+    this._group.addControl(addProgBtn);
+
+    const addFixedBtn = new Autodesk.Viewing.UI.Button('AddFixedPolygonBtn');
+    addFixedBtn.onClick = () => this._addPolygonFixed();
+    addFixedBtn.setToolTip('Add Polygon Programmatically (fixed order)');
+    addFixedBtn.icon.classList.add('fas', 'fa-check-square');
+    this._group.addControl(addFixedBtn);
   }
 
   _activatePolygonTool() {
@@ -94,6 +106,83 @@ class Edit2dExtension extends Autodesk.Viewing.Extension {
       try { active.selection?.clear(); } catch (_) { /* noop */ }
       this.viewer.toolController.deactivateTool(active.getName());
     }
+  }
+
+  _addPolygonProgrammatically() {
+    const ctx = this._edit2D.defaultContext;
+
+    this._removeAllLabels();
+    ctx.clearLayer();
+
+    // Use the current camera center so the polygon is visible on any sheet.
+    const pos = this.viewer.navigation.getPosition();
+    const s = 1.0;
+    const coords = [
+      { x: pos.x - s, y: pos.y - s },
+      { x: pos.x + s, y: pos.y - s },
+      { x: pos.x + s, y: pos.y + s },
+      { x: pos.x - s, y: pos.y + s },
+    ];
+
+    const poly = new Autodesk.Edit2D.Polygon(coords);
+    ctx.layer.addShape(poly);
+    this._createAreaLabel(poly);
+
+    // 0 ms forces tool activation in the very next event-loop tick —
+    // most aggressive timing to surface the race condition.
+    setTimeout(() => {
+      const controller = this.viewer.toolController;
+      const active = controller.getActiveTool();
+      if (active && active.getName().startsWith('Edit2')) {
+        controller.deactivateTool(active.getName());
+      }
+      controller.deactivateTool(this._edit2D.defaultTools.polygonTool.getName());
+
+      controller.activateTool(this._edit2D.defaultTools.polygonEditTool.getName());
+      ctx.selection.setSelection([]);
+      ctx.selection.selectOnly(poly);
+      ctx.layer.update();
+      this.viewer.impl.invalidate(true, true, true);
+    }, 0);
+  }
+
+  _addPolygonFixed() {
+    const ctx = this._edit2D.defaultContext;
+
+    this._removeAllLabels();
+    ctx.clearLayer();
+
+    const pos = this.viewer.navigation.getPosition();
+    const s = 1.0;
+    const coords = [
+      { x: pos.x - s, y: pos.y - s },
+      { x: pos.x + s, y: pos.y - s },
+      { x: pos.x + s, y: pos.y + s },
+      { x: pos.x - s, y: pos.y + s },
+    ];
+
+    const poly = new Autodesk.Edit2D.Polygon(coords);
+    ctx.layer.addShape(poly);
+    this._createAreaLabel(poly);
+
+    // Flush the layer and request a render BEFORE activating the edit tool.
+    // This ensures vertex positions are computed in screen space before
+    // the tool's first pointer event fires.
+    ctx.layer.update();
+    this.viewer.impl.invalidate(true, true, true);
+
+    setTimeout(() => {
+      const controller = this.viewer.toolController;
+      const active = controller.getActiveTool();
+      if (active && active.getName().startsWith('Edit2')) {
+        controller.deactivateTool(active.getName());
+      }
+      controller.deactivateTool(this._edit2D.defaultTools.polygonTool.getName());
+
+      controller.activateTool(this._edit2D.defaultTools.polygonEditTool.getName());
+      ctx.selection.setSelection([]);
+      ctx.selection.selectOnly(poly);
+    }, 50);
   }
 
   // --- Polygon creation callback (PolygonTool.POLYGON_ADDED) ---
